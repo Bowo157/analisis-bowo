@@ -7,3 +7,8 @@ seaborn
 plotly
 matplotlib
 statsmodels
+openpyxl
+xlrd
+odfpy
+pyxlsb
+xlsxwriter
