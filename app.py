@@ -346,44 +346,54 @@ if input_method == "Upload File":
                         df = pd.read_csv(uploaded_file, encoding='latin1')
                 elif file_type in ['xlsx', 'xls', 'ods', 'xlsb']:
                     try:
-                        # Baca Excel tanpa mengkonversi tipe data terlebih dahulu
+                        # Baca Excel dengan header pertama
                         df = pd.read_excel(
                             uploaded_file,
-                            dtype=str  # Baca semua kolom sebagai string dulu
+                            header=0,  # Gunakan baris pertama sebagai header awal
+                            dtype=str   # Baca semua sebagai string dulu
                         )
+                        
+                        # Cek jika ada merged cells di header (baris kedua)
+                        temp_df = pd.read_excel(uploaded_file, header=None)
+                        if len(temp_df) > 1 and temp_df.iloc[1].notna().any():
+                            # Jika baris kedua berisi data header tambahan
+                            second_header = temp_df.iloc[1]
+                            # Update nama kolom dengan menggabungkan header jika perlu
+                            new_columns = []
+                            for i, col in enumerate(df.columns):
+                                second_val = second_header.iloc[i]
+                                if pd.notna(second_val) and str(second_val).strip() != str(col).strip():
+                                    new_columns.append(f"{col} {second_val}".strip())
+                                else:
+                                    new_columns.append(str(col).strip())
+                            df.columns = new_columns
+                            # Hapus baris header kedua dari data
+                            df = df.iloc[1:]
                         
                         # Hapus baris yang semuanya None/NaN
                         df = df.dropna(how='all')
-                        
-                        # Hapus kolom yang semuanya None/NaN
-                        df = df.dropna(axis=1, how='all')
-                        
-                        # Bersihkan nama kolom
-                        df.columns = df.columns.str.strip()
                         
                         # Konversi tipe data untuk setiap kolom
                         for col in df.columns:
                             # Skip jika kolom kosong
                             if df[col].isna().all():
                                 continue
-                                
-                            # Coba konversi ke datetime
-                            try:
-                                # Cek sampel non-NA values
-                                sample = df[col].dropna().iloc[0]
-                                if isinstance(sample, str) and any(x in sample.lower() for x in ['-', '/', ':']) and len(sample) >= 8:
-                                    temp_series = pd.to_datetime(df[col], errors='coerce')
-                                    if temp_series.notna().sum() > 0.5 * len(df):  # Jika >50% bisa dikonversi
-                                        df[col] = temp_series
-                                        continue
-                            except:
-                                pass
                             
-                            # Coba konversi ke numerik
+                            # Ambil sampel nilai non-NA
+                            sample_values = df[col].dropna()
+                            if len(sample_values) == 0:
+                                continue
+                                
+                            # Coba konversi nilai numerik
                             try:
-                                temp_series = pd.to_numeric(df[col], errors='coerce')
-                                if temp_series.notna().sum() > 0.5 * len(df):  # Jika >50% bisa dikonversi
-                                    df[col] = temp_series
+                                # Jika kolom mengandung T0, T1, etc., biarkan sebagai string
+                                if df[col].astype(str).str.contains(r'^T\d+$', regex=True).any():
+                                    continue
+                                
+                                # Coba konversi ke numerik
+                                numeric_vals = pd.to_numeric(df[col].astype(str).str.replace(',', '.'), errors='coerce')
+                                if numeric_vals.notna().any():  # Jika ada nilai yang bisa dikonversi
+                                    df[col] = numeric_vals
                                     continue
                             except:
                                 pass
