@@ -346,37 +346,50 @@ if input_method == "Upload File":
                         df = pd.read_csv(uploaded_file, encoding='latin1')
                 elif file_type in ['xlsx', 'xls', 'ods', 'xlsb']:
                     try:
-                        # Baca Excel dengan keep_default_na=True untuk menangani nilai kosong dengan benar
+                        # Baca Excel tanpa mengkonversi tipe data terlebih dahulu
                         df = pd.read_excel(
                             uploaded_file,
-                            keep_default_na=True,
-                            na_values=['NA', 'N/A', ''],  # Tambahkan nilai yang dianggap NA
-                            parse_dates=True  # Otomatis parse kolom tanggal
+                            dtype=str  # Baca semua kolom sebagai string dulu
                         )
                         
-                        # Konversi kolom datetime yang salah terbaca
+                        # Hapus baris yang semuanya None/NaN
+                        df = df.dropna(how='all')
+                        
+                        # Hapus kolom yang semuanya None/NaN
+                        df = df.dropna(axis=1, how='all')
+                        
+                        # Bersihkan nama kolom
+                        df.columns = df.columns.str.strip()
+                        
+                        # Konversi tipe data untuk setiap kolom
                         for col in df.columns:
-                            # Cek jika kolom berisi format tanggal/waktu
-                            if df[col].dtype == 'object':
-                                try:
-                                    # Coba konversi ke datetime
+                            # Skip jika kolom kosong
+                            if df[col].isna().all():
+                                continue
+                                
+                            # Coba konversi ke datetime
+                            try:
+                                # Cek sampel non-NA values
+                                sample = df[col].dropna().iloc[0]
+                                if isinstance(sample, str) and any(x in sample.lower() for x in ['-', '/', ':']) and len(sample) >= 8:
                                     temp_series = pd.to_datetime(df[col], errors='coerce')
-                                    # Jika lebih dari 70% bisa dikonversi, jadikan datetime
-                                    if temp_series.notna().sum() > 0.7 * len(df):
+                                    if temp_series.notna().sum() > 0.5 * len(df):  # Jika >50% bisa dikonversi
                                         df[col] = temp_series
-                                except:
-                                    pass
-                                    
-                            # Cek jika kolom berisi angka
-                            if df[col].dtype == 'object':
-                                try:
-                                    # Coba konversi ke numerik
-                                    temp_series = pd.to_numeric(df[col], errors='coerce')
-                                    # Jika lebih dari 70% bisa dikonversi, jadikan numerik
-                                    if temp_series.notna().sum() > 0.7 * len(df):
-                                        df[col] = temp_series
-                                except:
-                                    pass
+                                        continue
+                            except:
+                                pass
+                            
+                            # Coba konversi ke numerik
+                            try:
+                                temp_series = pd.to_numeric(df[col], errors='coerce')
+                                if temp_series.notna().sum() > 0.5 * len(df):  # Jika >50% bisa dikonversi
+                                    df[col] = temp_series
+                                    continue
+                            except:
+                                pass
+                            
+                            # Jika tidak bisa dikonversi, biarkan sebagai string tapi bersihkan
+                            df[col] = df[col].astype(str).replace('nan', '').replace('None', '')
                     except Exception as e:
                         st.error(f"❌ Error membaca file Excel: {str(e)}")
                         st.error("Pastikan format Excel sesuai dan tidak rusak")
