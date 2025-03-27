@@ -346,45 +346,50 @@ if input_method == "Upload File":
                         df = pd.read_csv(uploaded_file, encoding='latin1')
                 elif file_type in ['xlsx', 'xls', 'ods', 'xlsb']:
                     try:
-                        # Baca Excel dengan multi-header
-                        df = pd.read_excel(
-                            uploaded_file,
-                            header=[0, 1],  # Baca dua baris pertama sebagai header
-                            dtype=str  # Baca semua sebagai string
-                        )
+                        # Baca Excel dengan openpyxl untuk kontrol penuh
+                        workbook = openpyxl.load_workbook(uploaded_file)
+                        sheet = workbook.active
                         
-                        if df.empty:
-                            st.error("❌ File Excel kosong")
+                        # Ambil data mentah tanpa konversi
+                        raw_data = []
+                        for row in sheet.iter_rows(values_only=True):
+                            raw_data.append([str(cell) if cell is not None else '' for cell in row])
+                        
+                        if len(raw_data) < 3:  # Minimal butuh 2 baris header + 1 baris data
+                            st.error("❌ File Excel kosong atau tidak memiliki cukup data")
                             st.stop()
                         
-                        # Deteksi kategori header dari data
-                        categories = set()
-                        for col in df.columns:
-                            main_header = str(col[0]).strip()
-                            # Cek apakah header utama mengandung kata yang menunjukkan kategori
-                            if any(word in main_header.upper() for word in ['BIOKIMIA', 'KINERJA', 'REPRODUKSI', 'DARAH', 'PRODUKTIF']):
-                                categories.add(main_header)
+                        # Ambil header dan data
+                        header1 = raw_data[0]
+                        header2 = raw_data[1]
+                        data = raw_data[2:]
                         
-                        # Gabungkan header multi-level
+                        # Deteksi kategori dari header pertama
+                        categories = set()
+                        for header in header1:
+                            header_upper = str(header).upper()
+                            if any(word in header_upper for word in ['BIOKIMIA', 'KINERJA', 'REPRODUKSI', 'DARAH', 'PRODUKTIF']):
+                                categories.add(header)
+                        
+                        # Buat nama kolom final
                         new_columns = []
-                        for col in df.columns:
-                            main_header = str(col[0]).strip()
-                            sub_header = str(col[1]).strip()
+                        for i in range(len(header1)):
+                            main_header = str(header1[i]).strip()
+                            sub_header = str(header2[i]).strip()
                             
-                            # Tentukan nama kolom final
-                            if main_header in categories:  # Gunakan kategori yang terdeteksi
+                            if main_header in categories:
                                 col_name = sub_header
-                            elif main_header == 'nan' or main_header == sub_header:
+                            elif main_header == 'nan' or main_header == sub_header or not main_header:
                                 col_name = sub_header
                             else:
                                 col_name = main_header
                             
-                            new_columns.append(col_name if col_name != 'nan' else '')
+                            new_columns.append(col_name if col_name != 'nan' and col_name else f'Column_{i}')
                         
-                        # Set nama kolom baru
-                        df.columns = new_columns
+                        # Buat DataFrame dengan kolom yang benar
+                        df = pd.DataFrame(data, columns=new_columns)
                         
-                        # Konversi data numerik dengan hati-hati
+                        # Konversi nilai numerik dengan hati-hati
                         for col in df.columns:
                             try:
                                 # Skip kolom yang terlihat seperti ID atau kategori
@@ -392,7 +397,7 @@ if input_method == "Upload File":
                                     continue
                                     
                                 # Bersihkan data
-                                cleaned = df[col].astype(str).str.strip()
+                                cleaned = df[col].str.strip()
                                 # Cek apakah nilai terlihat seperti angka
                                 is_numeric = cleaned.str.replace(',', '.').str.match(r'^\d*\.?\d+$')
                                 
