@@ -346,51 +346,70 @@ if input_method == "Upload File":
                         df = pd.read_csv(uploaded_file, encoding='latin1')
                 elif file_type in ['xlsx', 'xls', 'ods', 'xlsb']:
                     try:
-                        # Baca Excel dengan opsi khusus
-                        df = pd.read_excel(
+                        # Baca Excel tanpa header dulu
+                        temp_df = pd.read_excel(
                             uploaded_file,
-                            dtype='object',  # Baca semua kolom sebagai string
+                            header=None,
+                            dtype=str,
                             engine='openpyxl'
                         )
                         
-                        # Deteksi header yang benar
-                        if 'BIOKIMIA DARAH' in ' '.join(map(str, df.iloc[0])):
+                        if temp_df.empty:
+                            st.error("❌ File Excel kosong")
+                            st.stop()
+                        
+                        # Cari baris dengan kategori utama
+                        header_row = None
+                        for idx in range(min(5, len(temp_df))):
+                            if 'BIOKIMIA DARAH' in str(temp_df.iloc[idx].values):
+                                header_row = idx
+                                break
+                        
+                        if header_row is not None:
+                            # Baca ulang dengan header yang benar
+                            df = pd.read_excel(
+                                uploaded_file,
+                                header=[header_row, header_row + 1],
+                                dtype=str,
+                                engine='openpyxl'
+                            )
+                            
                             # Gabungkan header multi-level
-                            main_header = df.iloc[0]
-                            sub_header = df.iloc[1]
-                            
-                            # Buat header baru
-                            new_headers = []
-                            for i in range(len(df.columns)):
-                                main = str(main_header[i]).strip()
-                                sub = str(sub_header[i]).strip()
-                                if pd.isna(main) or main == 'nan':
-                                    new_headers.append(sub)
-                                elif pd.isna(sub) or sub == 'nan' or main == sub:
-                                    new_headers.append(main)
+                            new_columns = []
+                            for col in df.columns:
+                                if pd.isna(col[0]) or col[0] in ['nan', 'None']:
+                                    new_columns.append(str(col[1]).strip())
+                                elif pd.isna(col[1]) or col[1] in ['nan', 'None'] or col[0] == col[1]:
+                                    new_columns.append(str(col[0]).strip())
+                                elif 'BIOKIMIA DARAH' in str(col[0]) or 'KINERJA REPRODUKSI' in str(col[0]):
+                                    new_columns.append(str(col[1]).strip())
                                 else:
-                                    new_headers.append(sub)
+                                    new_columns.append(f"{str(col[0])} {str(col[1])}".strip())
                             
-                            # Set header baru dan hapus baris header lama
-                            df.columns = new_headers
-                            df = df.iloc[2:]
-                        
-                        # Reset index setelah menghapus baris
-                        df = df.reset_index(drop=True)
-                        
-                        # Konversi tipe data
-                        for col in df.columns:
-                            if col in ['NO', 'BCS']:
-                                continue
-                                
-                            try:
-                                # Coba konversi ke numerik
-                                temp_series = pd.to_numeric(df[col].astype(str).str.replace(',', '.'), errors='coerce')
-                                # Jika mayoritas nilai bisa dikonversi, terapkan
-                                if temp_series.notna().sum() > len(df) * 0.5:
-                                    df[col] = temp_series
-                            except:
-                                pass
+                            # Set header baru
+                            df.columns = new_columns
+                            
+                            # Konversi nilai numerik dengan hati-hati
+                            for col in df.columns:
+                                try:
+                                    if col in ['NO', 'BCS']:  # Skip kolom non-numerik
+                                        continue
+                                    
+                                    # Bersihkan dan konversi data
+                                    cleaned = df[col].astype(str).str.strip()
+                                    # Hanya konversi jika terlihat seperti angka
+                                    numeric_mask = cleaned.str.replace(',', '.').str.match(r'^\d*\.?\d+$')
+                                    
+                                    if numeric_mask.any():
+                                        df.loc[numeric_mask, col] = pd.to_numeric(
+                                            cleaned[numeric_mask].str.replace(',', '.'),
+                                            downcast='float'  # Gunakan tipe float yang sesuai
+                                        )
+                                except Exception as e:
+                                    st.warning(f"⚠️ Peringatan saat konversi kolom {col}: {str(e)}")
+                        else:
+                            st.error("❌ Format file tidak sesuai")
+                            st.stop()
                         
                         # Hapus baris yang semuanya kosong
                         df = df.dropna(how='all')
