@@ -346,44 +346,49 @@ if input_method == "Upload File":
                         df = pd.read_csv(uploaded_file, encoding='latin1')
                 elif file_type in ['xlsx', 'xls', 'ods', 'xlsb']:
                     try:
-                        # Baca Excel dengan opsi dasar
+                        # Baca Excel dengan multi-header
                         df = pd.read_excel(
                             uploaded_file,
-                            dtype=str  # Baca semua sebagai string dulu
+                            header=[0, 1],  # Baca dua baris pertama sebagai header
+                            dtype=str       # Baca semua sebagai string untuk mencegah konversi otomatis
                         )
                         
                         if df.empty:
                             st.error("❌ File Excel kosong")
                             st.stop()
                         
-                        # Bersihkan nama kolom
-                        df.columns = df.columns.str.strip()
+                        # Gabungkan header multi-level menjadi nama kolom tunggal
+                        new_columns = []
+                        for col in df.columns:
+                            if 'BIOKIMIA DARAH' in str(col[0]) or 'KINERJA REPRODUKSI' in str(col[0]):
+                                # Gunakan sub-header jika header utama adalah kategori
+                                new_columns.append(str(col[1]).strip())
+                            else:
+                                # Gunakan header yang ada nilai
+                                header_parts = [str(x).strip() for x in col if str(x).strip() != 'nan']
+                                new_columns.append(header_parts[0] if header_parts else '')
+                        
+                        # Set nama kolom baru
+                        df.columns = new_columns
+                        
+                        # Konversi nilai numerik dengan hati-hati
+                        for col in df.columns:
+                            if col in ['NO', 'BCS']:  # Skip kolom non-numerik
+                                continue
+                            
+                            try:
+                                # Bersihkan data dan ganti koma dengan titik
+                                cleaned = df[col].astype(str).str.strip().str.replace(',', '.')
+                                # Coba konversi ke numerik
+                                numeric_col = pd.to_numeric(cleaned, errors='coerce')
+                                # Jika mayoritas nilai bisa dikonversi, terapkan
+                                if numeric_col.notna().sum() > len(df) * 0.5:
+                                    df[col] = numeric_col
+                            except:
+                                pass
                         
                         # Hapus baris yang semuanya kosong
                         df = df.dropna(how='all')
-                        
-                        # Konversi tipe data kolom
-                        for col in df.columns:
-                            # Coba deteksi dan konversi tipe data
-                            try:
-                                # Bersihkan data
-                                cleaned = df[col].astype(str).str.strip()
-                                
-                                # Skip jika kolom terlihat seperti ID atau kategori
-                                if col.upper() in ['NO', 'ID', 'BCS', 'KATEGORI', 'CATEGORY']:
-                                    continue
-                                    
-                                # Coba konversi ke numerik
-                                numeric_col = pd.to_numeric(
-                                    cleaned.str.replace(',', '.'),  # Ganti koma dengan titik
-                                    errors='coerce'
-                                )
-                                
-                                # Terapkan jika sebagian besar bisa dikonversi
-                                if numeric_col.notna().sum() > len(df) * 0.3:  # Lebih fleksibel (30%)
-                                    df[col] = numeric_col
-                            except:
-                                continue  # Biarkan sebagai string jika gagal
                     except Exception as e:
                         st.error(f"❌ Error membaca file Excel: {str(e)}")
                         st.error("Pastikan format Excel sesuai dan tidak rusak")
