@@ -298,10 +298,37 @@ input_method = st.radio(
 )
 
 if input_method == "Upload File":
-    # Upload file
+    # Upload file dengan penanganan mobile-friendly
+    st.markdown("""
+    <style>
+    /* CSS untuk membuat file uploader lebih mobile-friendly */
+    .stFileUploader > div > div {
+        padding: 20px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        min-height: 150px;
+    }
+    .stFileUploader > div > div > small {
+        display: none;  /* Sembunyikan teks default */
+    }
+    </style>
+    """, unsafe_allow_html=True)
+    
+    # Tambahkan petunjuk upload yang jelas
+    st.markdown("""
+    ### 📱 Petunjuk Upload File:
+    1. Klik area upload di bawah
+    2. Pilih "Browse" atau "Choose File"
+    3. Pilih file dari perangkat Anda
+    4. Format yang didukung: Excel (.xlsx, .xls) atau CSV (.csv)
+    """)
+    
     uploaded_file = st.file_uploader(
-        "📁 Unggah file (.csv, .xlsx, .xls, .ods, .xlsb)", 
-        type=['csv', 'xlsx', 'xls', 'ods', 'xlsb']
+        "📁 Klik atau Tap di sini untuk memilih file", 
+        type=['csv', 'xlsx', 'xls', 'ods', 'xlsb'],
+        help="Pilih file Excel atau CSV dari perangkat Anda"
     )
 
     # Cek apakah ada file yang diunggah
@@ -318,7 +345,42 @@ if input_method == "Upload File":
                     except UnicodeDecodeError:
                         df = pd.read_csv(uploaded_file, encoding='latin1')
                 elif file_type in ['xlsx', 'xls', 'ods', 'xlsb']:
-                    df = pd.read_excel(uploaded_file)
+                    try:
+                        # Baca Excel dengan keep_default_na=True untuk menangani nilai kosong dengan benar
+                        df = pd.read_excel(
+                            uploaded_file,
+                            keep_default_na=True,
+                            na_values=['NA', 'N/A', ''],  # Tambahkan nilai yang dianggap NA
+                            parse_dates=True  # Otomatis parse kolom tanggal
+                        )
+                        
+                        # Konversi kolom datetime yang salah terbaca
+                        for col in df.columns:
+                            # Cek jika kolom berisi format tanggal/waktu
+                            if df[col].dtype == 'object':
+                                try:
+                                    # Coba konversi ke datetime
+                                    temp_series = pd.to_datetime(df[col], errors='coerce')
+                                    # Jika lebih dari 70% bisa dikonversi, jadikan datetime
+                                    if temp_series.notna().sum() > 0.7 * len(df):
+                                        df[col] = temp_series
+                                except:
+                                    pass
+                                    
+                            # Cek jika kolom berisi angka
+                            if df[col].dtype == 'object':
+                                try:
+                                    # Coba konversi ke numerik
+                                    temp_series = pd.to_numeric(df[col], errors='coerce')
+                                    # Jika lebih dari 70% bisa dikonversi, jadikan numerik
+                                    if temp_series.notna().sum() > 0.7 * len(df):
+                                        df[col] = temp_series
+                                except:
+                                    pass
+                    except Exception as e:
+                        st.error(f"❌ Error membaca file Excel: {str(e)}")
+                        st.error("Pastikan format Excel sesuai dan tidak rusak")
+                        st.stop()
                 else:
                     st.error(f"❌ Format file .{file_type} tidak didukung")
                     st.stop()
