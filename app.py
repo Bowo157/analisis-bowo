@@ -346,77 +346,44 @@ if input_method == "Upload File":
                         df = pd.read_csv(uploaded_file, encoding='latin1')
                 elif file_type in ['xlsx', 'xls', 'ods', 'xlsb']:
                     try:
-                        # Baca Excel dengan pandas ExcelFile untuk kontrol lebih baik
-                        xls = pd.ExcelFile(uploaded_file)
-                        
-                        # Baca worksheet pertama dengan semua sel sebagai string
+                        # Baca Excel dengan opsi dasar
                         df = pd.read_excel(
-                            xls,
-                            sheet_name=0,
-                            header=None,
-                            dtype=str,
-                            na_filter=False,  # Jangan konversi NA
-                            convert_float=False  # Jangan konversi float
+                            uploaded_file,
+                            dtype=str  # Baca semua sebagai string dulu
                         )
                         
                         if df.empty:
                             st.error("❌ File Excel kosong")
                             st.stop()
                         
-                        # Cari baris dengan header BIOKIMIA DARAH
-                        header_idx = None
-                        for idx in range(min(5, len(df))):
-                            if 'BIOKIMIA DARAH' in str(df.iloc[idx].values):
-                                header_idx = idx
-                                break
-                        
-                        if header_idx is None:
-                            st.error("❌ Format file tidak sesuai")
-                            st.stop()
-                        
-                        # Proses header
-                        main_header = df.iloc[header_idx]
-                        sub_header = df.iloc[header_idx + 1]
-                        
-                        # Buat nama kolom final
-                        new_columns = []
-                        for i in range(len(df.columns)):
-                            main = str(main_header[i]).strip()
-                            sub = str(sub_header[i]).strip()
-                            
-                            if main in ['BIOKIMIA DARAH', 'KINERJA REPRODUKSI']:
-                                col_name = sub
-                            elif main == 'nan' or main == sub:
-                                col_name = sub
-                            else:
-                                col_name = main
-                            
-                            new_columns.append(col_name if col_name != 'nan' else f'Column_{i}')
-                        
-                        # Ambil data dan set header baru
-                        df = df.iloc[header_idx + 2:].copy()
-                        df.columns = new_columns
-                        df = df.reset_index(drop=True)
-                        
-                        # Konversi data numerik dengan kontrol ketat
-                        for col in df.columns:
-                            if col in ['NO', 'BCS']:  # Skip kolom non-numerik
-                                continue
-                                
-                            try:
-                                # Proses setiap nilai dalam kolom
-                                for idx in df.index:
-                                    val = str(df.at[idx, col]).strip()
-                                    # Hanya konversi jika benar-benar angka
-                                    if val and val.replace('.', '', 1).replace('-', '', 1).isdigit():
-                                        df.at[idx, col] = float(val)
-                                    elif val and ',' in val and val.replace(',', '.', 1).replace('-', '', 1).replace('.', '', 1).isdigit():
-                                        df.at[idx, col] = float(val.replace(',', '.'))
-                            except:
-                                pass  # Biarkan nilai original jika gagal konversi
+                        # Bersihkan nama kolom
+                        df.columns = df.columns.str.strip()
                         
                         # Hapus baris yang semuanya kosong
                         df = df.dropna(how='all')
+                        
+                        # Konversi tipe data kolom
+                        for col in df.columns:
+                            # Coba deteksi dan konversi tipe data
+                            try:
+                                # Bersihkan data
+                                cleaned = df[col].astype(str).str.strip()
+                                
+                                # Skip jika kolom terlihat seperti ID atau kategori
+                                if col.upper() in ['NO', 'ID', 'BCS', 'KATEGORI', 'CATEGORY']:
+                                    continue
+                                    
+                                # Coba konversi ke numerik
+                                numeric_col = pd.to_numeric(
+                                    cleaned.str.replace(',', '.'),  # Ganti koma dengan titik
+                                    errors='coerce'
+                                )
+                                
+                                # Terapkan jika sebagian besar bisa dikonversi
+                                if numeric_col.notna().sum() > len(df) * 0.3:  # Lebih fleksibel (30%)
+                                    df[col] = numeric_col
+                            except:
+                                continue  # Biarkan sebagai string jika gagal
                     except Exception as e:
                         st.error(f"❌ Error membaca file Excel: {str(e)}")
                         st.error("Pastikan format Excel sesuai dan tidak rusak")
