@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import io
+from datetime import datetime
 from scipy.stats import ttest_ind, f_oneway, pearsonr, shapiro, levene, mannwhitneyu, chi2_contingency
 import plotly.express as px
 import plotly.graph_objects as go
@@ -346,14 +347,22 @@ if input_method == "Upload File":
                         df = pd.read_csv(uploaded_file, encoding='latin1')
                 elif file_type in ['xlsx', 'xls', 'ods', 'xlsb']:
                     try:
-                        # Baca Excel dengan openpyxl untuk kontrol penuh
-                        workbook = openpyxl.load_workbook(uploaded_file)
+                        # Baca Excel dengan openpyxl untuk kontrol penuh, tanpa konversi tanggal
+                        workbook = openpyxl.load_workbook(uploaded_file, data_only=True)
                         sheet = workbook.active
                         
-                        # Ambil data mentah tanpa konversi
+                        # Ambil data mentah dan pastikan semua nilai sebagai string
                         raw_data = []
                         for row in sheet.iter_rows(values_only=True):
-                            raw_data.append([str(cell) if cell is not None else '' for cell in row])
+                            row_data = []
+                            for cell in row:
+                                if cell is None:
+                                    row_data.append('')
+                                elif isinstance(cell, datetime):
+                                    row_data.append(cell.strftime('%Y-%m-%d %H:%M:%S'))
+                                else:
+                                    row_data.append(str(cell))
+                            raw_data.append(row_data)
                         
                         if len(raw_data) < 3:  # Minimal butuh 2 baris header + 1 baris data
                             st.error("❌ File Excel kosong atau tidak memiliki cukup data")
@@ -392,14 +401,20 @@ if input_method == "Upload File":
                         # Konversi nilai numerik dengan hati-hati
                         for col in df.columns:
                             try:
-                                # Skip kolom yang terlihat seperti ID atau kategori
-                                if col.upper() in ['NO', 'ID', 'BCS', 'KATEGORI']:
+                                # Skip kolom yang terlihat seperti ID, kategori, atau tanggal
+                                if (col.upper() in ['NO', 'ID', 'BCS', 'KATEGORI'] or
+                                    'TANGGAL' in col.upper() or 'TGL' in col.upper() or
+                                    'WAKTU' in col.upper() or 'JAM' in col.upper() or
+                                    'TIME' in col.upper() or 'DATE' in col.upper()):
                                     continue
                                     
                                 # Bersihkan data
                                 cleaned = df[col].str.strip()
-                                # Cek apakah nilai terlihat seperti angka
+                                # Cek apakah nilai terlihat seperti angka (tapi bukan tanggal)
                                 is_numeric = cleaned.str.replace(',', '.').str.match(r'^\d*\.?\d+$')
+                                # Skip jika terlihat seperti tanggal (angka dengan / atau -)
+                                if cleaned.str.contains(r'\d+[/-]\d+').any():
+                                    continue
                                 
                                 if is_numeric.any():
                                     # Konversi hanya nilai yang benar-benar numerik
