@@ -346,29 +346,29 @@ if input_method == "Upload File":
                         df = pd.read_csv(uploaded_file, encoding='latin1')
                 elif file_type in ['xlsx', 'xls', 'ods', 'xlsb']:
                     try:
-                        # Baca Excel dengan header pertama
+                        # Baca Excel dengan header yang benar
                         df = pd.read_excel(
                             uploaded_file,
-                            header=0,  # Gunakan baris pertama sebagai header awal
-                            dtype=str   # Baca semua sebagai string dulu
+                            header=[0, 1],  # Baca dua baris pertama sebagai multi-index header
+                            dtype=str  # Baca semua sebagai string dulu
                         )
                         
-                        # Cek jika ada merged cells di header (baris kedua)
-                        temp_df = pd.read_excel(uploaded_file, header=None)
-                        if len(temp_df) > 1 and temp_df.iloc[1].notna().any():
-                            # Jika baris kedua berisi data header tambahan
-                            second_header = temp_df.iloc[1]
-                            # Update nama kolom dengan menggabungkan header jika perlu
+                        # Gabungkan header multi-level dan handle merged cells
+                        if isinstance(df.columns, pd.MultiIndex):
                             new_columns = []
-                            for i, col in enumerate(df.columns):
-                                second_val = second_header.iloc[i]
-                                if pd.notna(second_val) and str(second_val).strip() != str(col).strip():
-                                    new_columns.append(f"{col} {second_val}".strip())
+                            for col in df.columns:
+                                # Ambil nilai non-NaN dari level header
+                                header_parts = [str(part).strip() for part in col if pd.notna(part)]
+                                if len(header_parts) > 1:
+                                    # Jika ada dua level, gabungkan dengan format yang sesuai
+                                    if header_parts[0] in ['BIOKIMIA DARAH', 'KINERJA REPRODUKSI']:
+                                        new_columns.append(header_parts[1])  # Gunakan sub-header saja
+                                    else:
+                                        new_columns.append(' '.join(header_parts))
                                 else:
-                                    new_columns.append(str(col).strip())
+                                    # Jika hanya satu level, gunakan apa adanya
+                                    new_columns.append(header_parts[0])
                             df.columns = new_columns
-                            # Hapus baris header kedua dari data
-                            df = df.iloc[1:]
                         
                         # Hapus baris yang semuanya None/NaN
                         df = df.dropna(how='all')
@@ -384,22 +384,21 @@ if input_method == "Upload File":
                             if len(sample_values) == 0:
                                 continue
                                 
+                            # Skip kolom non-numerik
+                            if col in ['NO', 'BCS']:
+                                continue
+                                
                             # Coba konversi nilai numerik
                             try:
-                                # Jika kolom mengandung T0, T1, etc., biarkan sebagai string
-                                if df[col].astype(str).str.contains(r'^T\d+$', regex=True).any():
-                                    continue
+                                # Bersihkan dan konversi ke numerik
+                                cleaned = df[col].astype(str).str.replace(',', '.').str.strip()
+                                numeric_vals = pd.to_numeric(cleaned, errors='coerce')
                                 
-                                # Coba konversi ke numerik
-                                numeric_vals = pd.to_numeric(df[col].astype(str).str.replace(',', '.'), errors='coerce')
-                                if numeric_vals.notna().any():  # Jika ada nilai yang bisa dikonversi
+                                # Hanya konversi jika nilai valid ditemukan
+                                if numeric_vals.notna().any():
                                     df[col] = numeric_vals
-                                    continue
                             except:
                                 pass
-                            
-                            # Jika tidak bisa dikonversi, biarkan sebagai string tapi bersihkan
-                            df[col] = df[col].astype(str).replace('nan', '').replace('None', '')
                     except Exception as e:
                         st.error(f"❌ Error membaca file Excel: {str(e)}")
                         st.error("Pastikan format Excel sesuai dan tidak rusak")
