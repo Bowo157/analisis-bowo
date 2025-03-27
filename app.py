@@ -350,42 +350,60 @@ if input_method == "Upload File":
                         df = pd.read_excel(
                             uploaded_file,
                             header=[0, 1],  # Baca dua baris pertama sebagai header
-                            dtype=str       # Baca semua sebagai string untuk mencegah konversi otomatis
+                            dtype=str  # Baca semua sebagai string
                         )
                         
                         if df.empty:
                             st.error("❌ File Excel kosong")
                             st.stop()
                         
-                        # Gabungkan header multi-level menjadi nama kolom tunggal
+                        # Deteksi kategori header dari data
+                        categories = set()
+                        for col in df.columns:
+                            main_header = str(col[0]).strip()
+                            # Cek apakah header utama mengandung kata yang menunjukkan kategori
+                            if any(word in main_header.upper() for word in ['BIOKIMIA', 'KINERJA', 'REPRODUKSI', 'DARAH', 'PRODUKTIF']):
+                                categories.add(main_header)
+                        
+                        # Gabungkan header multi-level
                         new_columns = []
                         for col in df.columns:
-                            if 'BIOKIMIA DARAH' in str(col[0]) or 'KINERJA REPRODUKSI' in str(col[0]):
-                                # Gunakan sub-header jika header utama adalah kategori
-                                new_columns.append(str(col[1]).strip())
+                            main_header = str(col[0]).strip()
+                            sub_header = str(col[1]).strip()
+                            
+                            # Tentukan nama kolom final
+                            if main_header in categories:  # Gunakan kategori yang terdeteksi
+                                col_name = sub_header
+                            elif main_header == 'nan' or main_header == sub_header:
+                                col_name = sub_header
                             else:
-                                # Gunakan header yang ada nilai
-                                header_parts = [str(x).strip() for x in col if str(x).strip() != 'nan']
-                                new_columns.append(header_parts[0] if header_parts else '')
+                                col_name = main_header
+                            
+                            new_columns.append(col_name if col_name != 'nan' else '')
                         
                         # Set nama kolom baru
                         df.columns = new_columns
                         
-                        # Konversi nilai numerik dengan hati-hati
+                        # Konversi data numerik dengan hati-hati
                         for col in df.columns:
-                            if col in ['NO', 'BCS']:  # Skip kolom non-numerik
-                                continue
-                            
                             try:
-                                # Bersihkan data dan ganti koma dengan titik
-                                cleaned = df[col].astype(str).str.strip().str.replace(',', '.')
-                                # Coba konversi ke numerik
-                                numeric_col = pd.to_numeric(cleaned, errors='coerce')
-                                # Jika mayoritas nilai bisa dikonversi, terapkan
-                                if numeric_col.notna().sum() > len(df) * 0.5:
-                                    df[col] = numeric_col
+                                # Skip kolom yang terlihat seperti ID atau kategori
+                                if col.upper() in ['NO', 'ID', 'BCS', 'KATEGORI']:
+                                    continue
+                                    
+                                # Bersihkan data
+                                cleaned = df[col].astype(str).str.strip()
+                                # Cek apakah nilai terlihat seperti angka
+                                is_numeric = cleaned.str.replace(',', '.').str.match(r'^\d*\.?\d+$')
+                                
+                                if is_numeric.any():
+                                    # Konversi hanya nilai yang benar-benar numerik
+                                    df.loc[is_numeric, col] = pd.to_numeric(
+                                        cleaned[is_numeric].str.replace(',', '.'),
+                                        errors='coerce'
+                                    )
                             except:
-                                pass
+                                continue
                         
                         # Hapus baris yang semuanya kosong
                         df = df.dropna(how='all')
