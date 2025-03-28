@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 import io
 from datetime import datetime
+import openpyxl
 from scipy.stats import ttest_ind, f_oneway, pearsonr, shapiro, levene, mannwhitneyu, chi2_contingency
 import plotly.express as px
 import plotly.graph_objects as go
@@ -111,21 +112,43 @@ def sort_dataframe(df, column):
 def detect_column_types(df):
     """Deteksi tipe data kolom dan konversi jika memungkinkan"""
     for col in df.columns:
-        # Coba konversi ke datetime
         try:
-            if pd.to_datetime(df[col], errors='coerce').notna().sum() > 0.7 * len(df):
-                df[col] = pd.to_datetime(df[col], errors='coerce')
+            # Skip kolom yang berisi T0/T1
+            if df[col].dtype == 'object' and df[col].str.contains('T0|T1').any():
+                continue
+            
+            if df[col].dtype == 'object':
+                # Bersihkan data
+                cleaned = df[col].str.strip()
+                
+                # Cek apakah kolom berisi angka dengan koma atau titik
+                has_numbers = cleaned.str.replace(',', '.').str.match(r'^\d*\.?\d+$').any()
+                
+                if has_numbers:
+                    # Konversi ke numerik dengan mengganti koma jadi titik
+                    df[col] = pd.to_numeric(
+                        cleaned.str.replace(',', '.'),
+                        errors='coerce'
+                    )
+                    continue
+                
+                # Cek apakah kolom berisi format tanggal yang valid
+                # Hanya jika tidak berisi angka murni
+                if not has_numbers:
+                    try:
+                        datetime_col = pd.to_datetime(cleaned, errors='coerce')
+                        if datetime_col.notna().sum() > 0.7 * len(df):
+                            df[col] = datetime_col
+                            continue
+                    except:
+                        pass
+                
+                # Jika bukan numerik dan bukan tanggal, biarkan sebagai string
+                df[col] = cleaned
+                
         except Exception:
-            pass
-        
-        # Coba konversi ke numerik jika bukan datetime
-        if df[col].dtype == 'object':
-            try:
-                numeric_col = pd.to_numeric(df[col], errors='coerce')
-                if numeric_col.notna().sum() > 0.7 * len(df):  # Jika >70% bisa dikonversi
-                    df[col] = numeric_col
-            except Exception:
-                pass
+            continue
+            
     return df
 
 def get_column_types(df):
@@ -368,60 +391,56 @@ if input_method == "Upload File":
                             st.error("❌ File Excel kosong atau tidak memiliki cukup data")
                             st.stop()
                         
-                        # Ambil header dan data
-                        header1 = raw_data[0]
-                        header2 = raw_data[1]
+                        # Baca header dan data dari Excel
+                        header1 = [str(cell).strip() if cell else '' for cell in raw_data[0]]
+                        header2 = [str(cell).strip() if cell else '' for cell in raw_data[1]]
                         data = raw_data[2:]
                         
-                        # Deteksi kategori dari header pertama
-                        categories = set()
-                        for header in header1:
-                            header_upper = str(header).upper()
-                            if any(word in header_upper for word in ['BIOKIMIA', 'KINERJA', 'REPRODUKSI', 'DARAH', 'PRODUKTIF']):
-                                categories.add(header)
-                        
-                        # Buat nama kolom final
+                        # Gabungkan header jika ada 2 baris
                         new_columns = []
                         for i in range(len(header1)):
-                            main_header = str(header1[i]).strip()
-                            sub_header = str(header2[i]).strip()
+                            main_header = header1[i]
+                            sub_header = header2[i] if i < len(header2) else ''
                             
-                            if main_header in categories:
+                            # Jika header utama kosong, gunakan sub header
+                            if not main_header or main_header.lower() == 'nan':
                                 col_name = sub_header
-                            elif main_header == 'nan' or main_header == sub_header or not main_header:
-                                col_name = sub_header
-                            else:
+                            # Jika sub header kosong atau sama dengan header utama, gunakan header utama
+                            elif not sub_header or sub_header.lower() == 'nan' or sub_header == main_header:
                                 col_name = main_header
+                            # Jika keduanya ada dan berbeda, gabungkan
+                            else:
+                                col_name = f"{main_header} - {sub_header}"
                             
-                            new_columns.append(col_name if col_name != 'nan' and col_name else f'Column_{i}')
+                            # Jika masih kosong, beri nama default
+                            new_columns.append(col_name if col_name else f'Column_{i}')
                         
-                        # Buat DataFrame dengan kolom yang benar
-                        df = pd.DataFrame(data, columns=new_columns)
+                        # Buat DataFrame dengan semua kolom sebagai string
+                        df = pd.DataFrame(data, columns=new_columns, dtype=str)
                         
-                        # Konversi nilai numerik dengan hati-hati
+                        # Deteksi dan konversi kolom numerik
                         for col in df.columns:
                             try:
-                                # Skip kolom yang terlihat seperti ID, kategori, atau tanggal
-                                if (col.upper() in ['NO', 'ID', 'BCS', 'KATEGORI'] or
-                                    'TANGGAL' in col.upper() or 'TGL' in col.upper() or
-                                    'WAKTU' in col.upper() or 'JAM' in col.upper() or
-                                    'TIME' in col.upper() or 'DATE' in col.upper()):
+                                # Skip kolom yang berisi T0/T1
+                                if df[col].str.contains('T0|T1').any():
                                     continue
                                     
                                 # Bersihkan data
                                 cleaned = df[col].str.strip()
-                                # Cek apakah nilai terlihat seperti angka (tapi bukan tanggal)
-                                is_numeric = cleaned.str.replace(',', '.').str.match(r'^\d*\.?\d+$')
-                                # Skip jika terlihat seperti tanggal (angka dengan / atau -)
-                                if cleaned.str.contains(r'\d+[/-]\d+').any():
-                                    continue
                                 
-                                if is_numeric.any():
-                                    # Konversi hanya nilai yang benar-benar numerik
-                                    df.loc[is_numeric, col] = pd.to_numeric(
-                                        cleaned[is_numeric].str.replace(',', '.'),
+                                # Cek apakah kolom berisi angka dengan koma atau titik
+                                has_numbers = cleaned.str.replace(',', '.').str.match(r'^\d*\.?\d+$').any()
+                                
+                                if has_numbers:
+                                    # Konversi ke numerik dengan mengganti koma jadi titik
+                                    df[col] = pd.to_numeric(
+                                        cleaned.str.replace(',', '.'),
                                         errors='coerce'
                                     )
+                                    continue
+                                    
+                                # Jika bukan numerik dan bukan T0/T1, biarkan sebagai string
+                                df[col] = cleaned
                             except:
                                 continue
                         
@@ -468,30 +487,84 @@ else:  # Input Manual
     st.header("📝 Input Data Manual")
     st.markdown("Input data secara manual dengan menentukan kolom dan tipe data.")
 
-    # Form untuk menambah kolom
-    with st.expander("➕ Tambah Kolom Baru"):
+    # Form untuk membuat tabel
+    with st.expander("📝 Buat Tabel Data", expanded=True):
         col1, col2 = st.columns(2)
         with col1:
-            nama_kolom = st.text_input("Nama Kolom:")
-        with col2:
-            tipe_data = st.selectbox(
-                "Tipe Data:",
-                ["number (angka)", "text (teks)", "date (tanggal)", "category (kategori)"]
-            )
+            jumlah_data = st.number_input("Jumlah Data:", min_value=1, value=1)
         
-        if st.button("➕ Tambah Kolom"):
-            if nama_kolom:
-                if nama_kolom not in st.session_state.nama_kolom_manual:
-                    st.session_state.nama_kolom_manual.append(nama_kolom)
-                    st.session_state.tipe_data_kolom.append(tipe_data)
-                    st.success(f"✅ Kolom {nama_kolom} ({tipe_data}) berhasil ditambahkan!")
-                    st.session_state.data_manual = pd.DataFrame(
-                        columns=st.session_state.nama_kolom_manual
+        # Tampilkan form untuk mengisi nama dan tipe data
+        if jumlah_data > 0:
+            st.write("### Definisikan Data")
+            kolom_baru = []
+            tipe_data_baru = []
+            
+            # Buat input fields untuk setiap data
+            for i in range(jumlah_data):
+                col1, col2 = st.columns(2)
+                with col1:
+                    nama_kolom = st.text_input(f"Nama Data {i+1}:", key=f"nama_data_{i}")
+                with col2:
+                    tipe_data = st.selectbox(
+                        f"Tipe Data {i+1}:",
+                        ["number (angka)", "text (teks)", "date (tanggal)", "category (kategori)"],
+                        key=f"tipe_data_{i}"
                     )
+                if nama_kolom:
+                    kolom_baru.append(nama_kolom)
+                    tipe_data_baru.append(tipe_data)
+            
+            # Tombol untuk membuat tabel
+            if st.button("✨ Buat Tabel") and len(kolom_baru) == jumlah_data:
+                # Validasi nama data unik
+                if len(set(kolom_baru)) != len(kolom_baru):
+                    st.error("❌ Nama data harus unik!")
+                elif "" in kolom_baru:
+                    st.error("❌ Semua data harus diberi nama!")
                 else:
-                    st.error("❌ Nama kolom sudah ada!")
-            else:
-                st.error("❌ Nama kolom tidak boleh kosong!")
+                    st.session_state.nama_kolom_manual = kolom_baru
+                    st.session_state.tipe_data_kolom = tipe_data_baru
+                    st.session_state.data_manual = pd.DataFrame(columns=kolom_baru)
+                    st.success("✅ Tabel berhasil dibuat!")
+                    st.rerun()
+
+    # Tampilkan tabel untuk input data jika struktur sudah dibuat
+    if st.session_state.nama_kolom_manual:
+        st.markdown("---")
+        st.subheader("📝 Input Nilai Data")
+        st.markdown("""
+        ℹ️ **Petunjuk Penggunaan:**
+        1. Gunakan tombol "➕ Tambah Baris" untuk menambah baris baru
+        2. Klik pada sel untuk mengedit nilai
+        3. Data akan otomatis tersimpan setelah diubah
+        """)
+        
+        # Tambahkan tombol untuk menambah baris
+        if st.button("➕ Tambah Baris"):
+            new_row = pd.DataFrame([[None] * len(st.session_state.nama_kolom_manual)], 
+                                 columns=st.session_state.nama_kolom_manual)
+            st.session_state.data_manual = pd.concat([st.session_state.data_manual, new_row], 
+                                                    ignore_index=True)
+        
+        # Tampilkan editor tabel dengan label yang lebih jelas
+        st.markdown("##### Tabel Input Data:")
+        edited_df = st.data_editor(
+            st.session_state.data_manual,
+            num_rows="dynamic",
+            use_container_width=True,
+            hide_index=False,
+            column_config={
+                "_index": st.column_config.NumberColumn(
+                    "No.",
+                    help="Nomor urut data",
+                    disabled=True
+                )
+            },
+            key="manual_table_editor"
+        )
+        
+        # Update data di session state
+        st.session_state.data_manual = edited_df
 
     # Tombol untuk reset data
     if st.button("🗑️ Reset Data"):
@@ -510,14 +583,22 @@ if not display_df.empty:
     st.markdown("---")
     st.header("📊 Data dan Analisis")
     
-    # Tab untuk memilih jenis analisis
-    analysis_type = st.radio(
-        "Pilih Jenis Analisis:",
-        ["Data Editor", "Statistik", "Marketing", "Visualisasi"],
-        horizontal=True
-    )
+    # Inisialisasi state untuk tracking langkah
+    if 'current_step' not in st.session_state:
+        st.session_state.current_step = 1
+    if 'data_edited' not in st.session_state:
+        st.session_state.data_edited = False
 
-    if analysis_type == "Data Editor":
+    # Header untuk langkah analisis
+    st.markdown("### 📊 Langkah Analisis Data")
+    
+    # Tampilkan langkah 1
+    st.subheader("1️⃣ Input & Edit Data")
+    
+    st.markdown("---")
+    
+    # Step 1: Input & Edit Data
+    if True:  # Always show step 1
         with st.expander("🔍 Filter dan Pengurutan Data", expanded=True):
             col1, col2 = st.columns(2)
             
@@ -591,8 +672,15 @@ if not display_df.empty:
                 st.error(f"❌ Error dalam memperbarui data: {str(e)}")
                 st.error("Pastikan tipe data sesuai dengan yang ditentukan")
 
-    elif analysis_type == "Statistik":
-        st.subheader("📊 Analisis Statistik")
+        # After data editing is done, enable step 2
+        if not edited_df.equals(st.session_state.data_manual):
+            st.session_state.data_edited = True
+            
+    # Step 2: Analisis Data
+    if st.session_state.data_edited:
+        st.markdown("---")
+        st.subheader("2️⃣ Analisis Data")
+        st.info("✨ Data telah siap untuk dianalisis!")
         stat_type = st.selectbox(
             "Pilih Jenis Analisis:",
             ["ANOVA (One-Way ANOVA)",
@@ -716,581 +804,6 @@ if not display_df.empty:
                     st.error(f"Error dalam uji Chi-Square: {str(e)}")
             else:
                 st.error("Minimal diperlukan 2 variabel kategorikal untuk uji Chi-Square")
-
-        elif stat_type == "Uji Normalitas (Shapiro-Wilk)":
-            st.write("Uji Shapiro-Wilk menguji apakah data berdistribusi normal.")
-            
-            numeric_cols = display_df.select_dtypes(include=['int64', 'float64']).columns
-            if len(numeric_cols) > 0:
-                var = st.selectbox("Pilih variabel untuk uji normalitas:", numeric_cols)
-                
-                try:
-                    stat, p_val = shapiro(display_df[var].dropna())
-                    
-                    st.write("Hasil Uji Shapiro-Wilk:")
-                    st.write(f"- Statistik uji: {stat:.4f}")
-                    st.write(f"- P-value: {p_val:.4f}")
-                    
-                    if p_val < 0.05:
-                        st.info("Data tidak berdistribusi normal (p < 0.05)")
-                    else:
-                        st.success("Data berdistribusi normal (p > 0.05)")
-                    
-                    # Visualisasi histogram dan Q-Q plot
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        fig1 = px.histogram(display_df, x=var, 
-                                          title=f"Histogram: {var}",
-                                          marginal="box")
-                        st.plotly_chart(fig1, use_container_width=True)
-                    
-                    with col2:
-                        from scipy.stats import probplot
-                        fig2 = go.Figure()
-                        qq_data = probplot(display_df[var].dropna())
-                        fig2.add_scatter(x=qq_data[0][0], y=qq_data[0][1], mode='markers')
-                        fig2.add_scatter(x=qq_data[0][0], 
-                                       y=qq_data[1][1] + qq_data[1][0] * qq_data[0][0],
-                                       mode='lines')
-                        fig2.update_layout(title="Q-Q Plot",
-                                         xaxis_title="Theoretical Quantiles",
-                                         yaxis_title="Sample Quantiles")
-                        st.plotly_chart(fig2, use_container_width=True)
-                except Exception as e:
-                    st.error(f"Error dalam uji normalitas: {str(e)}")
-            else:
-                st.error("Minimal diperlukan 1 variabel numerik untuk uji normalitas")
-
-        elif stat_type == "Uji Homogenitas (Levene)":
-            st.write("Uji Levene menguji kesamaan varians antar grup.")
-            
-            numeric_cols = display_df.select_dtypes(include=['int64', 'float64']).columns
-            categorical_cols = display_df.select_dtypes(include=['object', 'category']).columns
-            
-            if len(numeric_cols) > 0 and len(categorical_cols) > 0:
-                col1, col2 = st.columns(2)
-                with col1:
-                    dependent_var = st.selectbox("Pilih variabel dependen (numerik):", numeric_cols)
-                with col2:
-                    group_var = st.selectbox("Pilih variabel grup (kategori):", categorical_cols)
-                
-                try:
-                    groups = [group for _, group in display_df.groupby(group_var)[dependent_var]]
-                    if len(groups) >= 2:
-                        stat, p_val = levene(*groups)
-                        
-                        st.write("Hasil Uji Levene:")
-                        st.write(f"- Statistik uji: {stat:.4f}")
-                        st.write(f"- P-value: {p_val:.4f}")
-                        
-                        if p_val < 0.05:
-                            st.info("Varians antar grup berbeda secara signifikan (p < 0.05)")
-                        else:
-                            st.success("Varians antar grup homogen (p > 0.05)")
-                        
-                        # Visualisasi box plot
-                        fig = px.box(display_df, x=group_var, y=dependent_var,
-                                   title=f"Box Plot: {dependent_var} berdasarkan {group_var}")
-                        st.plotly_chart(fig, use_container_width=True)
-                    else:
-                        st.error("Minimal diperlukan 2 grup untuk uji homogenitas")
-                except Exception as e:
-                    st.error(f"Error dalam uji homogenitas: {str(e)}")
-            else:
-                st.error("Diperlukan minimal 1 variabel numerik dan 1 variabel kategorikal")
-
-        elif stat_type == "Regresi Linear Sederhana":
-            st.write("Regresi Linear Sederhana memprediksi variabel dependen berdasarkan satu variabel independen.")
-            
-            numeric_cols = display_df.select_dtypes(include=['int64', 'float64']).columns
-            if len(numeric_cols) >= 2:
-                col1, col2 = st.columns(2)
-                with col1:
-                    x_var = st.selectbox("Pilih variabel independen (X):", numeric_cols)
-                with col2:
-                    y_var = st.selectbox("Pilih variabel dependen (Y):", 
-                                       [col for col in numeric_cols if col != x_var])
-                
-                try:
-                    X = sm.add_constant(display_df[x_var])
-                    model = sm.OLS(display_df[y_var], X).fit()
-                    
-                    st.write("Hasil Regresi Linear Sederhana:")
-                    st.write(model.summary().tables[1])
-                    
-                    r_squared = model.rsquared
-                    st.write(f"R-squared: {r_squared:.4f}")
-                    
-                    # Visualisasi scatter plot dengan garis regresi
-                    fig = px.scatter(display_df, x=x_var, y=y_var,
-                                   title=f"Scatter Plot dengan Garis Regresi: {y_var} vs {x_var}",
-                                   trendline="ols")
-                    st.plotly_chart(fig, use_container_width=True)
-                except Exception as e:
-                    st.error(f"Error dalam analisis regresi: {str(e)}")
-            else:
-                st.error("Minimal diperlukan 2 variabel numerik untuk regresi linear sederhana")
-
-        elif stat_type == "Regresi Linear Berganda":
-            st.write("Regresi Linear Berganda memprediksi variabel dependen berdasarkan beberapa variabel independen.")
-            
-            numeric_cols = display_df.select_dtypes(include=['int64', 'float64']).columns
-            if len(numeric_cols) >= 3:
-                y_var = st.selectbox("Pilih variabel dependen (Y):", numeric_cols)
-                x_vars = st.multiselect(
-                    "Pilih variabel independen (X):",
-                    [col for col in numeric_cols if col != y_var],
-                    default=[col for col in numeric_cols if col != y_var][:2]
-                )
-                
-                if len(x_vars) >= 2:
-                    try:
-                        X = sm.add_constant(display_df[x_vars])
-                        model = sm.OLS(display_df[y_var], X).fit()
-                        
-                        st.write("Hasil Regresi Linear Berganda:")
-                        st.write(model.summary().tables[1])
-                        
-                        r_squared = model.rsquared
-                        st.write(f"R-squared: {r_squared:.4f}")
-                        
-                        # Visualisasi prediksi vs aktual
-                        predictions = model.predict(X)
-                        fig = go.Figure()
-                        fig.add_scatter(x=display_df[y_var], y=predictions,
-                                      mode='markers',
-                                      name='Prediksi vs Aktual')
-                        fig.add_scatter(x=[display_df[y_var].min(), display_df[y_var].max()],
-                                      y=[display_df[y_var].min(), display_df[y_var].max()],
-                                      mode='lines',
-                                      name='Perfect Prediction')
-                        fig.update_layout(title="Prediksi vs Nilai Aktual",
-                                        xaxis_title="Nilai Aktual",
-                                        yaxis_title="Nilai Prediksi")
-                        st.plotly_chart(fig, use_container_width=True)
-                    except Exception as e:
-                        st.error(f"Error dalam analisis regresi berganda: {str(e)}")
-                else:
-                    st.error("Pilih minimal 2 variabel independen")
-            else:
-                st.error("Minimal diperlukan 3 variabel numerik untuk regresi linear berganda")
-
-        elif stat_type == "Uji Mann-Whitney U":
-            st.write("Uji Mann-Whitney U membandingkan dua grup independen (alternatif non-parametrik dari t-test).")
-            
-            numeric_cols = display_df.select_dtypes(include=['int64', 'float64']).columns
-            categorical_cols = display_df.select_dtypes(include=['object', 'category']).columns
-            
-            if len(numeric_cols) > 0 and len(categorical_cols) > 0:
-                col1, col2 = st.columns(2)
-                with col1:
-                    numeric_var = st.selectbox("Pilih variabel numerik:", numeric_cols)
-                with col2:
-                    cat_var = st.selectbox("Pilih variabel kategori (harus 2 grup):", categorical_cols)
-                
-                unique_groups = display_df[cat_var].unique()
-                if len(unique_groups) == 2:
-                    try:
-                        group1 = display_df[display_df[cat_var] == unique_groups[0]][numeric_var]
-                        group2 = display_df[display_df[cat_var] == unique_groups[1]][numeric_var]
-                        
-                        stat, p_val = mannwhitneyu(group1, group2, alternative='two-sided')
-                        
-                        st.write("Hasil Uji Mann-Whitney U:")
-                        st.write(f"- Statistik U: {stat:.4f}")
-                        st.write(f"- P-value: {p_val:.4f}")
-                        
-                        if p_val < 0.05:
-                            st.success("Terdapat perbedaan signifikan antara grup (p < 0.05)")
-                        else:
-                            st.info("Tidak terdapat perbedaan signifikan antara grup (p > 0.05)")
-                        
-                        # Visualisasi box plot
-                        fig = px.box(display_df, x=cat_var, y=numeric_var,
-                                   title=f"Box Plot: {numeric_var} berdasarkan {cat_var}")
-                        st.plotly_chart(fig, use_container_width=True)
-                    except Exception as e:
-                        st.error(f"Error dalam uji Mann-Whitney U: {str(e)}")
-                else:
-                    st.error("Variabel kategori harus memiliki tepat 2 grup")
-            else:
-                st.error("Diperlukan minimal 1 variabel numerik dan 1 variabel kategorikal")
-
-        elif stat_type == "Uji Wilcoxon":
-            st.write("Uji Wilcoxon membandingkan dua pengukuran berpasangan (alternatif non-parametrik dari paired t-test).")
-            
-            numeric_cols = display_df.select_dtypes(include=['int64', 'float64']).columns
-            if len(numeric_cols) >= 2:
-                col1, col2 = st.columns(2)
-                with col1:
-                    var1 = st.selectbox("Pilih pengukuran pertama:", numeric_cols)
-                with col2:
-                    var2 = st.selectbox("Pilih pengukuran kedua:", 
-                                      [col for col in numeric_cols if col != var1])
-                
-                try:
-                    from scipy.stats import wilcoxon
-                    stat, p_val = wilcoxon(display_df[var1], display_df[var2])
-                    
-                    st.write("Hasil Uji Wilcoxon:")
-                    st.write(f"- Statistik W: {stat:.4f}")
-                    st.write(f"- P-value: {p_val:.4f}")
-                    
-                    if p_val < 0.05:
-                        st.success("Terdapat perbedaan signifikan antara pengukuran (p < 0.05)")
-                    else:
-                        st.info("Tidak terdapat perbedaan signifikan antara pengukuran (p > 0.05)")
-                    
-                    # Visualisasi box plot
-                    df_long = pd.melt(display_df[[var1, var2]])
-                    fig = px.box(df_long, x='variable', y='value',
-                               title=f"Box Plot: Perbandingan {var1} dan {var2}")
-                    st.plotly_chart(fig, use_container_width=True)
-                except Exception as e:
-                    st.error(f"Error dalam uji Wilcoxon: {str(e)}")
-            else:
-                st.error("Minimal diperlukan 2 variabel numerik untuk uji Wilcoxon")
-
-        elif stat_type == "Uji Kruskal-Wallis":
-            st.write("Uji Kruskal-Wallis membandingkan tiga atau lebih grup independen (alternatif non-parametrik dari ANOVA).")
-            
-            numeric_cols = display_df.select_dtypes(include=['int64', 'float64']).columns
-            categorical_cols = display_df.select_dtypes(include=['object', 'category']).columns
-            
-            if len(numeric_cols) > 0 and len(categorical_cols) > 0:
-                col1, col2 = st.columns(2)
-                with col1:
-                    numeric_var = st.selectbox("Pilih variabel numerik:", numeric_cols)
-                with col2:
-                    cat_var = st.selectbox("Pilih variabel kategori:", categorical_cols)
-                
-                unique_groups = display_df[cat_var].unique()
-                if len(unique_groups) >= 3:
-                    try:
-                        from scipy.stats import kruskal
-                        groups = [group for _, group in display_df.groupby(cat_var)[numeric_var]]
-                        stat, p_val = kruskal(*groups)
-                        
-                        st.write("Hasil Uji Kruskal-Wallis:")
-                        st.write(f"- Statistik H: {stat:.4f}")
-                        st.write(f"- P-value: {p_val:.4f}")
-                        
-                        if p_val < 0.05:
-                            st.success("Terdapat perbedaan signifikan antara grup (p < 0.05)")
-                        else:
-                            st.info("Tidak terdapat perbedaan signifikan antara grup (p > 0.05)")
-                        
-                        # Visualisasi box plot
-                        fig = px.box(display_df, x=cat_var, y=numeric_var,
-                                   title=f"Box Plot: {numeric_var} berdasarkan {cat_var}")
-                        st.plotly_chart(fig, use_container_width=True)
-                    except Exception as e:
-                        st.error(f"Error dalam uji Kruskal-Wallis: {str(e)}")
-                else:
-                    st.error("Variabel kategori harus memiliki minimal 3 grup")
-            else:
-                st.error("Diperlukan minimal 1 variabel numerik dan 1 variabel kategorikal")
-
-        elif stat_type == "Uji Friedman":
-            st.write("Uji Friedman membandingkan tiga atau lebih pengukuran berpasangan.")
-            
-            numeric_cols = display_df.select_dtypes(include=['int64', 'float64']).columns
-            if len(numeric_cols) >= 3:
-                selected_vars = st.multiselect(
-                    "Pilih minimal 3 pengukuran:",
-                    numeric_cols,
-                    default=list(numeric_cols)[:3]
-                )
-                
-                if len(selected_vars) >= 3:
-                    try:
-                        from scipy.stats import friedmanchisquare
-                        stat, p_val = friedmanchisquare(*[display_df[var] for var in selected_vars])
-                        
-                        st.write("Hasil Uji Friedman:")
-                        st.write(f"- Chi-square statistic: {stat:.4f}")
-                        st.write(f"- P-value: {p_val:.4f}")
-                        
-                        if p_val < 0.05:
-                            st.success("Terdapat perbedaan signifikan antara pengukuran (p < 0.05)")
-                        else:
-                            st.info("Tidak terdapat perbedaan signifikan antara pengukuran (p > 0.05)")
-                        
-                        # Visualisasi box plot
-                        df_long = pd.melt(display_df[selected_vars])
-                        fig = px.box(df_long, x='variable', y='value',
-                                   title="Box Plot: Perbandingan Pengukuran")
-                        st.plotly_chart(fig, use_container_width=True)
-                    except Exception as e:
-                        st.error(f"Error dalam uji Friedman: {str(e)}")
-                else:
-                    st.error("Pilih minimal 3 variabel untuk uji Friedman")
-            else:
-                st.error("Minimal diperlukan 3 variabel numerik untuk uji Friedman")
-
-    elif analysis_type == "Marketing":
-        st.subheader("📊 Analisis Marketing")
-        st.write("Analisis metrik-metrik penting dalam marketing untuk mengukur efektivitas kampanye.")
-        
-        marketing_metric = st.selectbox(
-            "Pilih Metrik Marketing:",
-            ["ROI (Return on Investment)", 
-             "CTR (Click Through Rate)", 
-             "Conversion Rate",
-             "CPA (Cost per Acquisition)",
-             "CPC (Cost per Click)",
-             "Impression Share",
-             "CLV (Customer Lifetime Value)",
-             "CAC (Customer Acquisition Cost)"]
-        )
-
-        if marketing_metric == "ROI (Return on Investment)":
-            st.write("💰 Return on Investment (ROI)")
-            st.write("ROI mengukur keuntungan atau kerugian yang dihasilkan dari investasi marketing.")
-            
-            col1, col2 = st.columns(2)
-            with col1:
-                revenue = st.number_input("Total Revenue (Pendapatan)", min_value=0.0, value=0.0)
-                investment = st.number_input("Total Investment (Investasi)", min_value=0.0, value=0.0)
-            
-            if investment > 0:
-                roi = ((revenue - investment) / investment) * 100
-                st.metric("ROI", f"{roi:.2f}%")
-                
-                fig = go.Figure()
-                fig.add_trace(go.Bar(
-                    x=['Revenue', 'Investment'],
-                    y=[revenue, investment],
-                    text=[f'${revenue:,.2f}', f'${investment:,.2f}'],
-                    textposition='auto',
-                ))
-                fig.update_layout(title="Revenue vs Investment")
-                st.plotly_chart(fig, use_container_width=True)
-
-        elif marketing_metric == "CTR (Click Through Rate)":
-            st.write("🖱️ Click Through Rate (CTR)")
-            st.write("CTR mengukur persentase orang yang mengklik iklan dari total yang melihat iklan.")
-            
-            col1, col2 = st.columns(2)
-            with col1:
-                clicks = st.number_input("Total Clicks", min_value=0, value=0)
-                impressions = st.number_input("Total Impressions", min_value=0, value=0)
-            
-            if impressions > 0:
-                ctr = (clicks / impressions) * 100
-                st.metric("CTR", f"{ctr:.2f}%")
-                
-                fig = go.Figure(go.Indicator(
-                    mode = "gauge+number",
-                    value = ctr,
-                    title = {'text': "Click Through Rate"},
-                    gauge = {'axis': {'range': [0, 100]}}
-                ))
-                st.plotly_chart(fig, use_container_width=True)
-
-        elif marketing_metric == "Conversion Rate":
-            st.write("🎯 Conversion Rate")
-            st.write("Conversion Rate mengukur persentase pengunjung yang melakukan tindakan yang diinginkan.")
-            
-            col1, col2 = st.columns(2)
-            with col1:
-                conversions = st.number_input("Total Conversions", min_value=0, value=0)
-                visitors = st.number_input("Total Visitors", min_value=0, value=0)
-            
-            if visitors > 0:
-                conv_rate = (conversions / visitors) * 100
-                st.metric("Conversion Rate", f"{conv_rate:.2f}%")
-                
-                fig = go.Figure(go.Indicator(
-                    mode = "gauge+number",
-                    value = conv_rate,
-                    title = {'text': "Conversion Rate"},
-                    gauge = {'axis': {'range': [0, 100]}}
-                ))
-                st.plotly_chart(fig, use_container_width=True)
-
-        elif marketing_metric == "CPA (Cost per Acquisition)":
-            st.write("💵 Cost per Acquisition (CPA)")
-            st.write("CPA mengukur biaya rata-rata untuk mendapatkan satu pelanggan.")
-            
-            col1, col2 = st.columns(2)
-            with col1:
-                total_cost = st.number_input("Total Marketing Cost", min_value=0.0, value=0.0)
-                acquisitions = st.number_input("Total Acquisitions", min_value=0, value=0)
-            
-            if acquisitions > 0:
-                cpa = total_cost / acquisitions
-                st.metric("CPA", f"${cpa:.2f}")
-                
-                fig = go.Figure()
-                fig.add_trace(go.Bar(
-                    x=['Cost per Acquisition'],
-                    y=[cpa],
-                    text=[f'${cpa:.2f}'],
-                    textposition='auto',
-                ))
-                st.plotly_chart(fig, use_container_width=True)
-
-        elif marketing_metric == "CPC (Cost per Click)":
-            st.write("💰 Cost per Click (CPC)")
-            st.write("CPC mengukur biaya rata-rata yang dibayarkan untuk setiap klik.")
-            
-            col1, col2 = st.columns(2)
-            with col1:
-                ad_cost = st.number_input("Total Ad Cost", min_value=0.0, value=0.0)
-                total_clicks = st.number_input("Total Clicks", min_value=0, value=0)
-            
-            if total_clicks > 0:
-                cpc = ad_cost / total_clicks
-                st.metric("CPC", f"${cpc:.2f}")
-                
-                fig = go.Figure()
-                fig.add_trace(go.Bar(
-                    x=['Cost per Click'],
-                    y=[cpc],
-                    text=[f'${cpc:.2f}'],
-                    textposition='auto',
-                ))
-                st.plotly_chart(fig, use_container_width=True)
-
-        elif marketing_metric == "Impression Share":
-            st.write("👀 Impression Share")
-            st.write("Impression Share mengukur persentase impresi yang diterima dari total impresi yang tersedia.")
-            
-            col1, col2 = st.columns(2)
-            with col1:
-                received = st.number_input("Received Impressions", min_value=0, value=0)
-                available = st.number_input("Total Available Impressions", min_value=0, value=0)
-            
-            if available > 0:
-                share = (received / available) * 100
-                st.metric("Impression Share", f"{share:.2f}%")
-                
-                fig = go.Figure(go.Indicator(
-                    mode = "gauge+number",
-                    value = share,
-                    title = {'text': "Impression Share"},
-                    gauge = {'axis': {'range': [0, 100]}}
-                ))
-                st.plotly_chart(fig, use_container_width=True)
-
-        elif marketing_metric == "CLV (Customer Lifetime Value)":
-            st.write("💎 Customer Lifetime Value (CLV)")
-            st.write("CLV memperkirakan total pendapatan yang diharapkan dari seorang pelanggan.")
-            
-            col1, col2 = st.columns(2)
-            with col1:
-                avg_purchase = st.number_input("Average Purchase Value", min_value=0.0, value=0.0)
-                purchase_freq = st.number_input("Purchase Frequency (per year)", min_value=0.0, value=0.0)
-                customer_lifespan = st.number_input("Customer Lifespan (years)", min_value=0.0, value=0.0)
-            
-            if all([avg_purchase, purchase_freq, customer_lifespan]):
-                clv = avg_purchase * purchase_freq * customer_lifespan
-                st.metric("CLV", f"${clv:.2f}")
-                
-                fig = go.Figure()
-                fig.add_trace(go.Bar(
-                    x=['Average Purchase', 'Annual Value', 'Lifetime Value'],
-                    y=[avg_purchase, avg_purchase * purchase_freq, clv],
-                    text=[f'${v:.2f}' for v in [avg_purchase, avg_purchase * purchase_freq, clv]],
-                    textposition='auto',
-                ))
-                fig.update_layout(title="CLV Components")
-                st.plotly_chart(fig, use_container_width=True)
-
-        elif marketing_metric == "CAC (Customer Acquisition Cost)":
-            st.write("💰 Customer Acquisition Cost (CAC)")
-            st.write("CAC mengukur biaya rata-rata untuk mendapatkan satu pelanggan baru.")
-            
-            col1, col2 = st.columns(2)
-            with col1:
-                marketing_costs = st.number_input("Total Marketing Costs", min_value=0.0, value=0.0)
-                sales_costs = st.number_input("Total Sales Costs", min_value=0.0, value=0.0)
-                new_customers = st.number_input("Number of New Customers", min_value=0, value=0)
-            
-            if new_customers > 0:
-                total_costs = marketing_costs + sales_costs
-                cac = total_costs / new_customers
-                st.metric("CAC", f"${cac:.2f}")
-                
-                fig = go.Figure()
-                fig.add_trace(go.Pie(
-                    labels=['Marketing Costs', 'Sales Costs'],
-                    values=[marketing_costs, sales_costs],
-                    textinfo='label+percent'
-                ))
-                fig.update_layout(title="Cost Breakdown")
-                st.plotly_chart(fig, use_container_width=True)
-
-    elif analysis_type == "Visualisasi":
-        st.subheader("📈 Visualisasi Data")
-        viz_type = st.selectbox(
-            "Pilih Jenis Visualisasi:",
-            ["Bar Chart - Perbandingan nilai antar kategori",
-             "Line Chart - Tren waktu atau hubungan sekuensial",
-             "Scatter Plot - Hubungan antara dua variabel numerik",
-             "Histogram - Distribusi frekuensi variabel numerik",
-             "Box Plot - Distribusi data dan outliers",
-             "Pie Chart - Proporsi/komposisi kategori",
-             "Heatmap - Korelasi antar variabel",
-             "Area Chart - Area di bawah garis trend",
-             "Bubble Chart - Scatter plot dengan variabel ukuran"]
-        )
-        
-        # Pilih kolom untuk visualisasi berdasarkan tipe grafik
-        if viz_type == "Heatmap - Korelasi antar variabel":
-            create_visualization(display_df, viz_type)
-        
-        elif viz_type == "Histogram - Distribusi frekuensi variabel numerik":
-            numeric_cols = display_df.select_dtypes(include=['int64', 'float64']).columns
-            x_col = st.selectbox("Pilih variabel untuk histogram:", numeric_cols)
-            create_visualization(display_df, viz_type, x_col=x_col)
-        
-        elif viz_type in ["Bar Chart - Perbandingan nilai antar kategori", 
-                         "Line Chart - Tren waktu atau hubungan sekuensial",
-                         "Box Plot - Distribusi data dan outliers",
-                         "Area Chart - Area di bawah garis trend"]:
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                x_col = st.selectbox("Pilih variabel X (kategori/waktu):", display_df.columns)
-            with col2:
-                numeric_cols = display_df.select_dtypes(include=['int64', 'float64']).columns
-                y_col = st.selectbox("Pilih variabel Y (numerik):", numeric_cols)
-            with col3:
-                color_col = st.selectbox("Pilih variabel warna (opsional):", 
-                                       ["Tidak ada"] + list(display_df.columns))
-            color_col = None if color_col == "Tidak ada" else color_col
-            create_visualization(display_df, viz_type, x_col, y_col, color_col)
-        
-        elif viz_type == "Pie Chart - Proporsi/komposisi kategori":
-            col1, col2 = st.columns(2)
-            with col1:
-                cat_col = st.selectbox("Pilih variabel kategori:", 
-                                     display_df.select_dtypes(include=['object']).columns)
-            with col2:
-                numeric_cols = display_df.select_dtypes(include=['int64', 'float64']).columns
-                value_col = st.selectbox("Pilih variabel nilai:", numeric_cols)
-            create_visualization(display_df, viz_type, x_col=cat_col, y_col=value_col)
-        
-        elif viz_type in ["Scatter Plot - Hubungan antara dua variabel numerik",
-                         "Bubble Chart - Scatter plot dengan variabel ukuran"]:
-            numeric_cols = display_df.select_dtypes(include=['int64', 'float64']).columns
-            col1, col2, col3, col4 = st.columns(4)
-            with col1:
-                x_col = st.selectbox("Pilih variabel X:", numeric_cols)
-            with col2:
-                y_col = st.selectbox("Pilih variabel Y:", 
-                                   [col for col in numeric_cols if col != x_col])
-            with col3:
-                color_col = st.selectbox("Pilih variabel warna (opsional):", 
-                                       ["Tidak ada"] + list(display_df.columns))
-            with col4:
-                size_col = st.selectbox("Pilih variabel ukuran (opsional):", 
-                                      ["Tidak ada"] + list(numeric_cols))
-            
-            color_col = None if color_col == "Tidak ada" else color_col
-            size_col = None if size_col == "Tidak ada" else size_col
-            create_visualization(display_df, viz_type, x_col, y_col, color_col, size_col)
 
 else:
     st.info("ℹ️ Silakan unggah atau input data terlebih dahulu untuk melihat analisis")
