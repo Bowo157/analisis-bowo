@@ -424,7 +424,7 @@ if input_method == "Upload File":
                                 # Skip kolom yang berisi T0/T1
                                 if df[col].str.contains('T0|T1').any():
                                     continue
-                                    
+                                
                                 # Bersihkan data
                                 cleaned = df[col].str.strip()
                                 
@@ -438,7 +438,7 @@ if input_method == "Upload File":
                                         errors='coerce'
                                     )
                                     continue
-                                    
+                                
                                 # Jika bukan numerik dan bukan T0/T1, biarkan sebagai string
                                 df[col] = cleaned
                             except:
@@ -645,7 +645,7 @@ if not display_df.empty:
                 # Validasi tipe data
                 for col, tipe in zip(st.session_state.nama_kolom_manual, st.session_state.tipe_data_kolom):
                     if tipe == "number (angka)":
-                        edited_df[col] = pd.to_numeric(edited_df[col], errors='coerce')
+                        edited_df[col] = pd.to_numeric(edited_df[col].astype(str).str.replace(',', '.'), errors='coerce')
                     elif tipe == "date (tanggal)":
                         edited_df[col] = pd.to_datetime(edited_df[col], errors='coerce')
                 
